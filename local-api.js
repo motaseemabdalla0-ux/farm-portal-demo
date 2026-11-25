@@ -239,6 +239,13 @@ const { buildDb, ops } = require("./seed");
 const { pageFor, farmTotals, SLUGS } = require("./pages");
 
 const PAGE_SIZE = 25;
+// Synthetic location (open desert with Esri imagery coverage; no real farm is meant to be here). Grid spacing 700 m; col/row are grid units.
+const BASE = { lat: 22.40, lon: 31.25 }, SPACING_M = 700;
+function geo(col, row) {
+  const lat = BASE.lat - row * SPACING_M / 111320;
+  const lon = BASE.lon + col * SPACING_M / (111320 * Math.cos(lat * Math.PI / 180));
+  return { lat: Math.round(lat * 1e6) / 1e6, lon: Math.round(lon * 1e6) / 1e6 };
+}
 
 function createApp() {
   const db = buildDb();
@@ -267,7 +274,9 @@ function createApp() {
     if (method === "GET" && path === "/api/map") {
       return json(200, {
         farm: farm.key, pivots: farmTotals(farm).pivots, partCount: farmTotals(farm).parts, fed: farmTotals(farm).fed, mapStatusKnown: 0,
-        parts: farm.parts.map(p => ({ id: p.id, pivot: p.pivot, part: p.part, crop: p.crop, areaFed: p.areaFed, x: p.x, y: p.y, r: p.rPx, status: null })),
+        center: geo(0, 0), radiusM: 290, roads: [...new Set(farm.parts.map(p => p.road).filter(Boolean))],
+        fleet: db.fleet.map((m, i) => ({ code: m.code, name: m.name, ...geo(-0.6 - i * 0.5, 0.5 + i * 0.7), lastFixDays: m.lastFixDays, online: m.online })),
+        parts: farm.parts.map(p => ({ id: p.id, pivot: p.pivot, part: p.part, crop: p.crop, areaFed: p.areaFed, x: p.x, y: p.y, r: p.rPx, ...geo((p.x - 80) / 130, (p.y - 80) / 130), status: null })),
       });
     }
 

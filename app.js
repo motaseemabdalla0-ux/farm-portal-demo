@@ -40,6 +40,7 @@ function buildNav(cur) {
 const routes = {
   async map() {
     const { data: m } = await api("/api/map");
+    if (window.L && window.renderMapView) { try { window.renderMapView(m, { $, esc, toast, state }); return; } catch (e) { console.warn("satellite map failed, using plain map", e); } }
     const cols = Math.max(...m.parts.map(p => p.x)) + 80, rows = Math.max(...m.parts.map(p => p.y)) + 80;
     $("#main").innerHTML = `<h1>Map view</h1><div class="sub">${m.pivots} pivots · ${m.partCount} parts · ${m.fed.toLocaleString()} fed</div>
     <div class="mapwrap"><svg id="svg" viewBox="0 0 ${cols} ${rows}">${m.parts.map(p => `<circle class="${p.crop}" data-id="${esc(p.id)}" cx="${p.x}" cy="${p.y}" r="${p.r}"></circle><text x="${p.x}" y="${p.y + 4}">${esc(p.id)}</text>`).join("")}</svg>
