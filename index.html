@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Farm Management · Replica</title>
+<link rel="stylesheet" href="style.css"></head>
+<body>
+<aside id="side"><div class="brand"><div class="logo">P</div><div><b>Farm Management</b><small id="farmName"></small></div></div><nav id="nav"></nav></aside>
+<div id="shell"><div id="demo">DEMO · mock data only · this is a test replica, not the real portal</div>
+<header><div id="crumb"></div>
+ <input id="search" type="search" placeholder="Pivots, lots, tasks, machines…" aria-label="Search">
+ <label class="sel">Farm <select id="farmSel"></select></label>
+ <label class="sel">Role <select id="roleSel"><option value="viewer">Viewer</option><option value="reviewer">Reviewer</option></select></label>
+</header>
+<main id="main" tabindex="-1"></main></div>
+<div id="toast" role="status"></div>
+<script src="local-api.js"></script><script src="app.js"></script></body></html>
