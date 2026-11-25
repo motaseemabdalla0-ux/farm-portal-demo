@@ -89,7 +89,7 @@ const routes = {
     const load = async () => {
       const { data } = await api(`/api/pivots?crop=${$("#fc").value}&road=${$("#fr").value}&q=${encodeURIComponent($("#fq").value)}`);
       $("#tb").innerHTML = table({ title: "Pivot register", sub: `${data.total} parts`, columns: ["Stage", "Pivot", "Part", "Road", "Leased, fed", "Cuts", "Hay, t", "t hay/fed vs plan", "Cuts taken", "CP in bale, %", "NDVI", "Water / ETc", "Next", "Alerts"],
-        rows: data.rows.map(r => [r.stage, r.pivot, `${r.part} · ${r.crop}`, r.road, r.leased, null, r.hay, null, null, r.cp, r.ndvi, null, null, null]), empty: "No matching parts" });
+        rows: data.rows.map(r => [r.stage, r.pivot, r.crop ? `${r.part} · ${r.crop}` : r.part, r.road, r.leased, null, r.hay, null, null, r.cp, r.ndvi, null, null, null]), empty: "No matching parts" });
     };
     ["fc", "fr"].forEach(i => $("#" + i).onchange = load); $("#fq").oninput = load; load();
     $("#seg").querySelectorAll("button").forEach(b => b.onclick = () => { $("#seg").querySelectorAll("button").forEach(x => x.classList.remove("on")); b.classList.add("on"); });

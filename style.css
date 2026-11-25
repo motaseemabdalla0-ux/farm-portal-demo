@@ -93,4 +93,4 @@ section.tbl h3 small{font-weight:400;color:var(--mut);margin-left:10px;font-size
 .rsmap{height:420px;background:#c9b48a}.legendbar{padding:8px 14px;font-size:12px;color:var(--mut)}.legendbar i{display:inline-block;width:12px;height:12px;border-radius:2px;margin:0 4px 0 12px;vertical-align:-2px}
 td small{color:var(--mut)}
 
-.plabel{font-size:10px!important}
+.plabel{font-size:13px!important;font-weight:800}

@@ -2,10 +2,41 @@
 const defs={},cache={};
 function req(n){n=n.replace('./','');if(cache[n])return cache[n].exports;const m={exports:{}};cache[n]=m;defs[n](m,m.exports,req);return m.exports}
 defs["seed"]=function(module,exports,require){
-// Mock data only. Codes, names and coordinates are synthetic; nothing here is real farm data.
+// Demo data. Pivot codes are anonymised (D1-001 ...); all other values (status, hay, contractors, submissions) are synthetic.
+// Farm 1 uses real pivot positions (lib/geometry.js); farm 2 is a synthetic layout.
 // Convention copied from the real portal: a value nobody supplied is null (shown as "Not supplied"), never 0.
 
 function rng(seed) { let s = seed; return () => (s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296; }
+
+const GEO = require("./geometry");
+const M = 111320;
+
+// Farm 1: pivot circles at their real positions, anonymised codes.
+function buildRealFarm(key, name, seed) {
+  const r = rng(seed);
+  const rows = GEO.split(";").map(x => x.split(","));
+  const parts = rows.map(([c, part, crop, area, lat, lon, rad]) => {
+    const n = Number(c);
+    return {
+      pivot: `D1-${c}`, part, id: `D1-${c}-${part}`,
+      crop: crop === "a" ? "alfalfa" : crop === "w" ? "wheat" : null,
+      road: n >= 46 && n <= 55 ? "C03" : null,
+      areaFed: Number(area), lat: Number(lat), lon: Number(lon), radiusM: Number(rad),
+      ndvi: r() < 0.37 ? Math.round((0.35 + r() * 0.5) * 100) / 100 : null, // 27 of 74 parts have values in the real portal
+      leased: null, stage: null,
+    };
+  });
+  const minLon = Math.min(...parts.map(p => p.lon)), maxLat = Math.max(...parts.map(p => p.lat));
+  parts.forEach(p => { p.x = 60 + (p.lon - minLon) * M * 0.92 / 8; p.y = 60 + (maxLat - p.lat) * M / 8; p.rPx = p.radiusM / 8; });
+  return { key, name, parts };
+}
+
+// synthetic location for farm 2 (open desert with imagery coverage)
+const BASE = { lat: 22.9, lon: 29.4 };
+function geoOf(east, north) {
+  const lat = BASE.lat + north / M;
+  return { lat: Math.round(lat * 1e6) / 1e6, lon: Math.round((BASE.lon + east / (M * Math.cos(lat * Math.PI / 180))) * 1e6) / 1e6 };
+}
 
 function buildFarm(key, name, prefix, seed) {
   const r = rng(seed);
@@ -30,6 +61,7 @@ function buildFarm(key, name, prefix, seed) {
             road: r() < 0.4 ? "C03" : null,
             areaFed: Math.round((part === "F" ? 66 : 33) * (0.9 + r() * 0.2) * 10) / 10,
             east, north, x: 80 + east / 6, y: 300 - north / 6, rPx: 48,
+            ...geoOf(east, north), radiusM: 290,
             ndvi: r() < 0.37 ? Math.round((0.35 + r() * 0.5) * 100) / 100 : null, // 27 of 74 parts have values in the real portal
             leased: null, stage: null,
           });
@@ -66,16 +98,16 @@ function buildSubmissions(parts) {
 }
 
 function buildDb() {
-  const farms = [buildFarm("demo", "Demo Farm", "D1", 11), buildFarm("demo2", "Demo Farm 2", "D2", 23)];
+  const farms = [buildRealFarm("demo", "Demo Farm", 11), buildFarm("demo2", "Demo Farm 2", "D2", 23)];
   const demo = farms[0];
   return {
     farms,
     submissions: buildSubmissions(demo.parts),
     nextId: 31,
     fleet: [
-      { code: "T-01", name: "Tractor 01", lat: 22.51, lon: 31.03, lastFixDays: 8, online: false },
-      { code: "T-02", name: "Tractor 02", lat: 22.52, lon: 31.04, lastFixDays: 28, online: false },
-      { code: "T-03", name: "Tractor 03", lat: 22.53, lon: 31.05, lastFixDays: 21, online: false },
+      { code: "T-01", name: "Tractor 01", lat: 22.5105, lon: 31.0262, lastFixDays: 8, online: false },
+      { code: "T-02", name: "Tractor 02", lat: 22.5248, lon: 31.0404, lastFixDays: 28, online: false },
+      { code: "T-03", name: "Tractor 03", lat: 22.5440, lon: 31.0580, lastFixDays: 21, online: false },
     ],
     scenes: [
       { date: "2026-11-23", sat: "Sentinel-2C", note: "cloudy", cloud: 0 },
@@ -326,12 +358,10 @@ const { buildDb, ops } = require("./seed");
 const { pageFor, farmTotals, SLUGS } = require("./pages");
 
 const PAGE_SIZE = 25;
-// Synthetic location (open desert with Esri imagery coverage; no real farm is meant to be here). Grid spacing 700 m; col/row are grid units.
-const BASE = { lat: 22.40, lon: 31.25 }, SPACING_M = 700;
-function geo(east, north) { // metres from the farm origin -> lat/lon
-  const lat = BASE.lat + north / 111320;
-  const lon = BASE.lon + east / (111320 * Math.cos(lat * Math.PI / 180));
-  return { lat: Math.round(lat * 1e6) / 1e6, lon: Math.round(lon * 1e6) / 1e6 };
+
+function centerOf(farm) {
+  const n = farm.parts.length;
+  return { lat: farm.parts.reduce((t, p) => t + p.lat, 0) / n, lon: farm.parts.reduce((t, p) => t + p.lon, 0) / n };
 }
 
 function createApp() {
@@ -361,9 +391,9 @@ function createApp() {
     if (method === "GET" && path === "/api/map") {
       return json(200, {
         farm: farm.key, pivots: farmTotals(farm).pivots, partCount: farmTotals(farm).parts, fed: farmTotals(farm).fed, mapStatusKnown: 0,
-        center: geo(3000, -1200), radiusM: 290, roads: [...new Set(farm.parts.map(p => p.road).filter(Boolean))],
-        fleet: db.fleet.map((m, i) => ({ code: m.code, name: m.name, ...geo(2400 + i * 900, -1500 - i * 600), lastFixDays: m.lastFixDays, online: m.online })),
-        parts: farm.parts.map(p => ({ id: p.id, pivot: p.pivot, part: p.part, crop: p.crop, areaFed: p.areaFed, x: p.x, y: p.y, r: p.rPx, ...geo(p.east, p.north), ndvi: p.ndvi, road: p.road, status: null })),
+        center: centerOf(farm), radiusM: 290, roads: [...new Set(farm.parts.map(p => p.road).filter(Boolean))],
+        fleet: farm.key === "demo" ? db.fleet.map(m => ({ code: m.code, name: m.name, lat: m.lat, lon: m.lon, lastFixDays: m.lastFixDays, online: m.online })) : [],
+        parts: farm.parts.map(p => ({ id: p.id, pivot: p.pivot, part: p.part, crop: p.crop, areaFed: p.areaFed, x: p.x, y: p.y, r: p.rPx, lat: p.lat, lon: p.lon, radiusM: p.radiusM, ndvi: p.ndvi, road: p.road, status: null })),
       });
     }
 

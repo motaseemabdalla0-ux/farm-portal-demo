@@ -68,8 +68,8 @@
 
     const shapes = new Map(), labels = L.layerGroup().addTo(map), fleet = L.layerGroup();
     // Look of the real portal: thin white outline, imagery visible through the pivot, one label per pivot.
-    const TINT = { alfalfa: "#3f7a3b", wheat: "#c2b25a" };
-    const style = (p, sel) => ({ color: sel ? "#ff4d4d" : "#ffffff", weight: sel ? 3 : 1.5, fillColor: TINT[p.crop] || "#3f7a3b", fillOpacity: $("#colorBy").value === "none" ? 0 : 0.28 });
+    const EDGE = { alfalfa: "#2e9b57", wheat: "#e0b400" }; // outline colour by recorded crop (white when not recorded)
+    const style = (p, sel) => ({ color: sel ? "#ff4d4d" : (EDGE[p.crop] || "#ffffff"), weight: sel ? 4 : 3, fillColor: EDGE[p.crop] || "#ffffff", fillOpacity: $("#colorBy").value === "none" ? 0 : 0.06 });
     let selected = null;
     const rings = L.layerGroup().addTo(map);
 
@@ -78,19 +78,19 @@
       const road = $("#roadSel").value;
       const seen = new Set();
       m.parts.filter(p => !road || p.road === road).forEach(p => {
-        const poly = L.polygon(half(p, m.radiusM, p.part), style(p, selected === p.id)).addTo(map);
+        const poly = L.polygon(half(p, p.radiusM || m.radiusM, p.part), style(p, selected === p.id)).addTo(map);
         poly.on("click", () => select(p));
         shapes.set(p.id, poly);
         if (!seen.has(p.pivot)) { // one label and one pivot-track ring per pivot (a split pivot has two parts)
           seen.add(p.pivot);
-          L.circle([p.lat, p.lon], { radius: m.radiusM * 0.6, color: "#ffffff", weight: 0.8, opacity: 0.35, fill: false, interactive: false }).addTo(rings);
+          L.circle([p.lat, p.lon], { radius: (p.radiusM || m.radiusM) * 0.6, color: "#ffffff", weight: 0.8, opacity: 0.35, fill: false, interactive: false }).addTo(rings);
           L.marker([p.lat, p.lon], { interactive: false, icon: L.divIcon({ className: "plabel", html: esc(p.pivot), iconSize: [60, 14], iconAnchor: [30, 7] }) }).addTo(labels);
         }
       });
       labelsVisible();
     }
     function labelsVisible() { // labels only when they fit; avoids the unreadable overlap at overview zoom
-      const show = map.getZoom() >= 13;
+      const show = map.getZoom() >= 12;
       if (show && !map.hasLayer(labels)) labels.addTo(map);
       if (!show && map.hasLayer(labels)) map.removeLayer(labels);
     }
@@ -99,7 +99,7 @@
       selected = p.id; draw();
       $("#pivpop").innerHTML = `<div class="pivpop"><button class="x" aria-label="Close" id="pclose">×</button>
         <h3>${esc(p.pivot)} · ${esc(p.part === "F" ? "whole" : p.part === "E" ? "East half" : "West half")}</h3>
-        <div class="meta">${p.road ? esc(p.road) : "Road not supplied"} · ${p.areaFed} fed · Crop not recorded</div>
+        <div class="meta">${p.road ? esc(p.road) : "Road not supplied"} · ${p.areaFed} fed · ${p.crop ? esc(p.crop) : "Crop not recorded"}</div>
         <dl><dt>Hay to date</dt><dd>Not supplied</dd><dt>Last cut</dt><dd>Not supplied</dd><dt>Recorded stage</dt><dd>Not recorded</dd>
         <dt>Recorded field status</dt><dd>Not recorded</dd><dt>Map status</dt><dd>Not recorded</dd><dt>Last scouted</dt><dd>Not recorded</dd>
         <dt>NDVI</dt><dd>${p.ndvi == null ? "Not supplied" : p.ndvi}</dd><dt>Open high / critical</dt><dd>0</dd></dl></div>`;
@@ -107,7 +107,9 @@
     }
     draw();
     const fit = () => map.fitBounds(L.latLngBounds(m.parts.map(p => [p.lat, p.lon])).pad(0.08), { paddingTopLeft: [330, 10], paddingBottomRight: [70, 10] }); // keep clear of the Today panel and tool rail
-    map.invalidateSize(); fit();
+    const med = k => { const v = m.parts.map(p => p[k]).sort((x, y) => x - y); return v[Math.floor(v.length / 2)]; };
+    const home = () => map.setView([med("lat"), med("lon") + 0.012], 13); // dense core of the farm, like the portal's opening view
+    map.invalidateSize(); home();
 
     fleet.addLayer(L.layerGroup(m.fleet.map(f => L.circleMarker([f.lat, f.lon], { radius: 7, color: "#fff", weight: 2, fillColor: "#8a8a8a", fillOpacity: 1 }).bindTooltip(`${f.code} · offline · last fix ${f.lastFixDays} d ago`))));
     let showFleet = false, online = false;
@@ -123,7 +125,7 @@
       if (k === "layers") { toast("Base map: Esri World Imagery"); return; }
       toast(b.title + ": not supplied in this demo");
     };
-    setTimeout(() => { map.invalidateSize(); fit(); }, 150);
+    setTimeout(() => { map.invalidateSize(); home(); }, 150);
   };
 
   // Small satellite map for Remote sensing: parts coloured by layer (only NDVI has values here).
@@ -133,7 +135,7 @@
     L.tileLayer(ESRI, { maxNativeZoom: 17, maxZoom: 18 }).addTo(map);
     L.control.attribution({ prefix: false }).addAttribution("Tiles © Esri · part-average map, not a 10 m pixel raster").addTo(map);
     const color = v => v == null ? "#9aa0a6" : v < 0.5 ? "#d9534f" : v < 0.65 ? "#f0ad4e" : "#2e8b57";
-    m.parts.forEach(p => L.polygon(half(p, m.radiusM, p.part), { color: "#fff", weight: 1.5, fillOpacity: 0.7, fillColor: layer === "NDVI" ? color(p.ndvi) : "#9aa0a6" })
+    m.parts.forEach(p => L.polygon(half(p, p.radiusM || m.radiusM, p.part), { color: "#fff", weight: 1.5, fillOpacity: 0.7, fillColor: layer === "NDVI" ? color(p.ndvi) : "#9aa0a6" })
       .bindTooltip(p.id + " · " + (layer === "NDVI" && p.ndvi != null ? "NDVI " + p.ndvi : "Unknown")).addTo(map));
     map.fitBounds(L.latLngBounds(m.parts.map(p => [p.lat, p.lon])).pad(0.2));
     setTimeout(() => map.invalidateSize(), 100);
