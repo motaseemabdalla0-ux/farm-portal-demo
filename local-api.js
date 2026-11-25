@@ -11,21 +11,29 @@ function buildFarm(key, name, prefix, seed) {
   const r = rng(seed);
   const parts = [];
   let n = 0;
-  for (let row = 0; row < 8 && n < 62; row++) {
-    for (let col = 0; col < 8 && n < 62; col++) {
-      n++;
-      const code = `${prefix}-${String(n).padStart(3, "0")}`;
-      const kinds = n % 5 === 0 ? ["E", "W"] : ["F"]; // 62 pivots, 12 of them split in two parts = 74 parts (same counts as the real farm)
-      for (const part of kinds) {
-        parts.push({
-          pivot: code, part, id: `${code}-${part}`,
-          crop: r() < 0.7 ? "alfalfa" : "wheat",
-          road: r() < 0.4 ? "C03" : null,
-          areaFed: Math.round((part === "F" ? 66 : 33) * (0.9 + r() * 0.2) * 10) / 10,
-          x: 80 + col * 130, y: 80 + row * 130, rPx: 52,
-          ndvi: r() < 0.37 ? Math.round((0.35 + r() * 0.5) * 100) / 100 : null, // 27 of 74 parts have values in the real portal
-          leased: null, stage: null,
-        });
+  // Three irregular blocks of staggered (hex-like) rows with small jitter, so the map does not look like a grid.
+  // east/north are metres from the farm origin; x/y are only used by the plain SVG fallback.
+  const blocks = [{ ox: 0, oy: 0 }, { ox: 5200, oy: 900 }, { ox: 1800, oy: -2300 }];
+  const SPX = 680, SPY = 600, ROWS = 3, COLS = 7;
+  for (const b of blocks) {
+    for (let row = 0; row < ROWS && n < 62; row++) {
+      for (let col = 0; col < COLS && n < 62; col++) {
+        n++;
+        const east = b.ox + col * SPX + (row % 2) * (SPX / 2) + (r() - 0.5) * 60;
+        const north = b.oy - row * SPY + (r() - 0.5) * 60;
+        const code = `${prefix}-${String(n).padStart(3, "0")}`;
+        const kinds = n % 5 === 0 ? ["E", "W"] : ["F"]; // 62 pivots, 12 split in two = 74 parts (same counts as the real farm)
+        for (const part of kinds) {
+          parts.push({
+            pivot: code, part, id: `${code}-${part}`,
+            crop: r() < 0.7 ? "alfalfa" : "wheat",
+            road: r() < 0.4 ? "C03" : null,
+            areaFed: Math.round((part === "F" ? 66 : 33) * (0.9 + r() * 0.2) * 10) / 10,
+            east, north, x: 80 + east / 6, y: 300 - north / 6, rPx: 48,
+            ndvi: r() < 0.37 ? Math.round((0.35 + r() * 0.5) * 100) / 100 : null, // 27 of 74 parts have values in the real portal
+            leased: null, stage: null,
+          });
+        }
       }
     }
   }
@@ -320,9 +328,9 @@ const { pageFor, farmTotals, SLUGS } = require("./pages");
 const PAGE_SIZE = 25;
 // Synthetic location (open desert with Esri imagery coverage; no real farm is meant to be here). Grid spacing 700 m; col/row are grid units.
 const BASE = { lat: 22.40, lon: 31.25 }, SPACING_M = 700;
-function geo(col, row) {
-  const lat = BASE.lat - row * SPACING_M / 111320;
-  const lon = BASE.lon + col * SPACING_M / (111320 * Math.cos(lat * Math.PI / 180));
+function geo(east, north) { // metres from the farm origin -> lat/lon
+  const lat = BASE.lat + north / 111320;
+  const lon = BASE.lon + east / (111320 * Math.cos(lat * Math.PI / 180));
   return { lat: Math.round(lat * 1e6) / 1e6, lon: Math.round(lon * 1e6) / 1e6 };
 }
 
@@ -353,9 +361,9 @@ function createApp() {
     if (method === "GET" && path === "/api/map") {
       return json(200, {
         farm: farm.key, pivots: farmTotals(farm).pivots, partCount: farmTotals(farm).parts, fed: farmTotals(farm).fed, mapStatusKnown: 0,
-        center: geo(0, 0), radiusM: 290, roads: [...new Set(farm.parts.map(p => p.road).filter(Boolean))],
-        fleet: db.fleet.map((m, i) => ({ code: m.code, name: m.name, ...geo(-0.6 - i * 0.5, 0.5 + i * 0.7), lastFixDays: m.lastFixDays, online: m.online })),
-        parts: farm.parts.map(p => ({ id: p.id, pivot: p.pivot, part: p.part, crop: p.crop, areaFed: p.areaFed, x: p.x, y: p.y, r: p.rPx, ...geo((p.x - 80) / 130, (p.y - 80) / 130), ndvi: p.ndvi, road: p.road, status: null })),
+        center: geo(3000, -1200), radiusM: 290, roads: [...new Set(farm.parts.map(p => p.road).filter(Boolean))],
+        fleet: db.fleet.map((m, i) => ({ code: m.code, name: m.name, ...geo(2400 + i * 900, -1500 - i * 600), lastFixDays: m.lastFixDays, online: m.online })),
+        parts: farm.parts.map(p => ({ id: p.id, pivot: p.pivot, part: p.part, crop: p.crop, areaFed: p.areaFed, x: p.x, y: p.y, r: p.rPx, ...geo(p.east, p.north), ndvi: p.ndvi, road: p.road, status: null })),
       });
     }
 

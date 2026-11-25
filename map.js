@@ -67,20 +67,34 @@
     L.control.attribution({ prefix: false }).addAttribution("Tiles © Esri").addTo(map);
 
     const shapes = new Map(), labels = L.layerGroup().addTo(map), fleet = L.layerGroup();
-    const style = (p, sel) => ({ color: sel ? "#ff4d4d" : "#ffffff", weight: sel ? 3 : 2, fillColor: "#9aa0a6", fillOpacity: $("#colorBy").value === "none" ? 0 : 0.35 });
+    // Look of the real portal: thin white outline, imagery visible through the pivot, one label per pivot.
+    const TINT = { alfalfa: "#3f7a3b", wheat: "#c2b25a" };
+    const style = (p, sel) => ({ color: sel ? "#ff4d4d" : "#ffffff", weight: sel ? 3 : 1.5, fillColor: TINT[p.crop] || "#3f7a3b", fillOpacity: $("#colorBy").value === "none" ? 0 : 0.28 });
     let selected = null;
+    const rings = L.layerGroup().addTo(map);
 
     function draw() {
-      shapes.forEach(s => map.removeLayer(s)); shapes.clear(); labels.clearLayers();
+      shapes.forEach(s => map.removeLayer(s)); shapes.clear(); labels.clearLayers(); rings.clearLayers();
       const road = $("#roadSel").value;
+      const seen = new Set();
       m.parts.filter(p => !road || p.road === road).forEach(p => {
         const poly = L.polygon(half(p, m.radiusM, p.part), style(p, selected === p.id)).addTo(map);
         poly.on("click", () => select(p));
         shapes.set(p.id, poly);
-        const off = p.part === "E" ? 0.00075 : p.part === "W" ? -0.00075 : 0;
-        L.marker([p.lat, p.lon + off], { interactive: false, icon: L.divIcon({ className: "plabel", html: esc(p.pivot + (p.part === "F" ? "" : " " + p.part)), iconSize: [70, 16], iconAnchor: [35, 8] }) }).addTo(labels);
+        if (!seen.has(p.pivot)) { // one label and one pivot-track ring per pivot (a split pivot has two parts)
+          seen.add(p.pivot);
+          L.circle([p.lat, p.lon], { radius: m.radiusM * 0.6, color: "#ffffff", weight: 0.8, opacity: 0.35, fill: false, interactive: false }).addTo(rings);
+          L.marker([p.lat, p.lon], { interactive: false, icon: L.divIcon({ className: "plabel", html: esc(p.pivot), iconSize: [60, 14], iconAnchor: [30, 7] }) }).addTo(labels);
+        }
       });
+      labelsVisible();
     }
+    function labelsVisible() { // labels only when they fit; avoids the unreadable overlap at overview zoom
+      const show = map.getZoom() >= 13;
+      if (show && !map.hasLayer(labels)) labels.addTo(map);
+      if (!show && map.hasLayer(labels)) map.removeLayer(labels);
+    }
+    map.on("zoomend", labelsVisible);
     function select(p) {
       selected = p.id; draw();
       $("#pivpop").innerHTML = `<div class="pivpop"><button class="x" aria-label="Close" id="pclose">×</button>
@@ -92,7 +106,7 @@
       $("#pclose").onclick = () => { selected = null; $("#pivpop").innerHTML = ""; draw(); };
     }
     draw();
-    const fit = () => map.fitBounds(L.latLngBounds(m.parts.map(p => [p.lat, p.lon])).pad(0.25));
+    const fit = () => map.fitBounds(L.latLngBounds(m.parts.map(p => [p.lat, p.lon])).pad(0.08), { paddingTopLeft: [330, 10], paddingBottomRight: [70, 10] }); // keep clear of the Today panel and tool rail
     map.invalidateSize(); fit();
 
     fleet.addLayer(L.layerGroup(m.fleet.map(f => L.circleMarker([f.lat, f.lon], { radius: 7, color: "#fff", weight: 2, fillColor: "#8a8a8a", fillOpacity: 1 }).bindTooltip(`${f.code} · offline · last fix ${f.lastFixDays} d ago`))));
