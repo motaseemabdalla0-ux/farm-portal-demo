@@ -209,7 +209,7 @@ async function render() {
   $("#farmName").textContent = state.farmInfo.name;
   $("#sideFoot").textContent = `${state.farmInfo.name} · ${state.farmInfo.pivots} pivots · ${Math.round(state.farmInfo.fed).toLocaleString()} fed`;
   $("#roleSel").value = state.role;
-  $("#crumb").innerHTML = `<a href="#/map">Map view</a> › <a href="#/pivots">${esc(state.farmInfo.name)}</a> › <b>${esc(TITLES[key].replace(/ \(.*\)/, ""))}</b>`;
+  $("#crumb").innerHTML = key === "map" ? "<b>Map view</b>" : `<a href="#/map">Map view</a> ›<a href="#/pivots">${esc(state.farmInfo.name)}</a> › <b>${esc(TITLES[key].replace(/ \(.*\)/, ""))}</b>`;
   $("#main").onclick = null;
   if (isInfo) return routes.info(slug.slice(2));
   const handler = routes[key];

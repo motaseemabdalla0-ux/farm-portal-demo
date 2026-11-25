@@ -93,7 +93,7 @@
     }
     draw();
     const fit = () => map.fitBounds(L.latLngBounds(m.parts.map(p => [p.lat, p.lon])).pad(0.25));
-    fit();
+    map.invalidateSize(); fit();
 
     fleet.addLayer(L.layerGroup(m.fleet.map(f => L.circleMarker([f.lat, f.lon], { radius: 7, color: "#fff", weight: 2, fillColor: "#8a8a8a", fillOpacity: 1 }).bindTooltip(`${f.code} · offline · last fix ${f.lastFixDays} d ago`))));
     let showFleet = false, online = false;
@@ -109,7 +109,7 @@
       if (k === "layers") { toast("Base map: Esri World Imagery"); return; }
       toast(b.title + ": not supplied in this demo");
     };
-    setTimeout(() => map.invalidateSize(), 100);
+    setTimeout(() => { map.invalidateSize(); fit(); }, 150);
   };
 
   // Small satellite map for Remote sensing: parts coloured by layer (only NDVI has values here).

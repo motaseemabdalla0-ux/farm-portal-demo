@@ -11,24 +11,29 @@ function buildFarm(key, name, prefix, seed) {
   const r = rng(seed);
   const parts = [];
   let n = 0;
-  for (let row = 0; row < 4; row++) {
-    for (let col = 0; col < 6; col++) {
+  for (let row = 0; row < 8 && n < 62; row++) {
+    for (let col = 0; col < 8 && n < 62; col++) {
       n++;
       const code = `${prefix}-${String(n).padStart(3, "0")}`;
-      const kinds = n % 3 === 0 ? ["E", "W"] : ["F"];
+      const kinds = n % 5 === 0 ? ["E", "W"] : ["F"]; // 62 pivots, 12 of them split in two parts = 74 parts (same counts as the real farm)
       for (const part of kinds) {
         parts.push({
           pivot: code, part, id: `${code}-${part}`,
           crop: r() < 0.7 ? "alfalfa" : "wheat",
           road: r() < 0.4 ? "C03" : null,
-          areaFed: Math.round((part === "F" ? 62 : 31) * (0.9 + r() * 0.2) * 10) / 10,
+          areaFed: Math.round((part === "F" ? 66 : 33) * (0.9 + r() * 0.2) * 10) / 10,
           x: 80 + col * 130, y: 80 + row * 130, rPx: 52,
-          ndvi: r() < 0.6 ? Math.round((0.35 + r() * 0.5) * 100) / 100 : null,
+          ndvi: r() < 0.37 ? Math.round((0.35 + r() * 0.5) * 100) / 100 : null, // 27 of 74 parts have values in the real portal
           leased: null, stage: null,
         });
       }
     }
   }
+  // Normalise so the farm total equals the real farm's 4,875.5 fed.
+  const total = parts.reduce((t, p) => t + p.areaFed, 0), k = 4875.5 / total;
+  parts.forEach(p => { p.areaFed = Math.round(p.areaFed * k * 10) / 10; });
+  const diff = Math.round((4875.5 - parts.reduce((t, p) => t + p.areaFed, 0)) * 10) / 10;
+  parts[parts.length - 1].areaFed = Math.round((parts[parts.length - 1].areaFed + diff) * 10) / 10;
   return { key, name, parts };
 }
 
