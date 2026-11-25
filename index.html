@@ -3,13 +3,14 @@
 <title>Farm Management · Replica</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><link rel="stylesheet" href="style.css"></head>
 <body>
-<aside id="side"><div class="brand"><div class="logo">P</div><div><b>Farm Management</b><small id="farmName"></small></div></div><nav id="nav"></nav></aside>
+<aside id="side"><div class="brand"><div class="logo">P</div><div><b>Farm Management</b><small id="farmName"></small></div></div><nav id="nav"></nav><div class="sidefoot"><div id="sideFoot"></div><button id="logout" disabled>Log out</button></div></aside>
 <div id="shell"><div id="demo">DEMO · mock data only · this is a test replica, not the real portal</div>
 <header><div id="crumb"></div>
  <input id="search" type="search" placeholder="Pivots, lots, tasks, machines…" aria-label="Search">
+ <button id="bell" aria-label="Notifications, 0 unread" class="hb">🔔</button><button id="lang" class="hb">العربية</button>
  <label class="sel">Farm <select id="farmSel"></select></label>
  <label class="sel">Role <select id="roleSel"><option value="viewer">Viewer</option><option value="reviewer">Reviewer</option></select></label>
-</header>
+<span class="user"><i>DU</i> Demo User</span></header>
 <main id="main" tabindex="-1"></main></div>
 <div id="toast" role="status"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script src="map.js"></script><script src="local-api.js"></script><script src="app.js"></script></body></html>

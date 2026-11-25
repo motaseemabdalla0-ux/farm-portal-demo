@@ -77,9 +77,11 @@ module.exports = { buildDb, ops, contractors };
 
 };
 defs["pages"]=function(module,exports,require){
-// Generic read-only pages. Same principle as the real portal:
-// no source connected -> null (shown as "Not supplied"), never 0.
+// Read-only pages modelled on the real portal. Principle copied from it:
+// no source connected -> null (rendered "Not supplied"), never 0.
 const NS = null;
+const btn = (label, hint) => ({ label, disabled: true, hint: hint || "Not available in this demo" });
+const sel = (label, options, extra = {}) => ({ kind: "select", label, options, ...extra });
 
 function farmTotals(farm) {
   const fed = farm.parts.reduce((a, p) => a + p.areaFed, 0);
@@ -92,136 +94,208 @@ function farmTotals(farm) {
 
 function pageFor(slug, farm, db) {
   const pending = db.submissions.filter(s => s.status === "new").length;
+  const bills = db.submissions.filter(s => s.bill).length;
   switch (slug) {
     case "dashboard":
       return {
         title: "Dashboard", subtitle: `${farm.name} · native farm performance and decisions`,
+        filters: [sel("Period", ["Today", "This week"])],
         kpis: [
           { label: "Operations planned", value: 0, hint: "In the selected period" },
-          { label: "Awaiting review (mobile)", value: pending, hint: "Mobile submissions with status New" },
+          { label: "In progress", value: 0, hint: "Persisted operation status" },
           { label: "Tasks due", value: 0, hint: "Not marked done" },
+          { label: "Tasks done", value: 0, hint: "Persisted task status" },
+          { label: "Awaiting review (mobile)", value: pending, hint: "Mobile submissions with status New" },
+          { label: "Manual tickets", value: 0, hint: "Recorded weighbridge tickets" },
           { label: "Hay, t @ 13%", value: NS, hint: "No season-wide weighbridge aggregate" },
           { label: "CP in bale, %", value: NS, hint: "No pivot-linked lab results" },
           { label: "Margin", value: NS, hint: "Accounting integration not available" },
         ],
         tables: [
-          { title: "Operations", columns: ["Status", "Operation", "Field part", "When", "Area, fed"], rows: [], empty: "No operations in this period" },
-          { title: "Open tasks", columns: ["Status", "Task", "What", "When"], rows: [], empty: "No tasks in this period" },
+          { title: "Operations", columns: ["Status", "Operation", "Field part", "When", "Area, fed"], rows: [], empty: "No operations in this period", sub: "The native service returned no scheduled operations for these dates." },
+          { title: "Open tasks", columns: ["Status", "Task", "What", "When"], rows: [], empty: "No tasks in this period", sub: "The native service returned no tasks due in these dates." },
+          { title: "Risks · blocked plan targets", columns: ["Plan", "Field part", "Blocked because"], rows: [], empty: "No blocked targets", sub: "No blocked plan targets were returned by the native service." },
         ],
-        notes: ["Farm work records only; no inferred production, inventory or accounting."],
+        notes: ["Farm work records and manual weighbridge; no inferred production, inventory or accounting. Accounting margin and vs-plan figures remain unknown until their source is connected."],
       };
     case "calendar":
       return {
-        title: "Crop calendar", subtitle: `${farm.name} · persisted work and cut records`, kpis: [],
+        title: "Crop calendar", subtitle: `${farm.name} · persisted work and cut records`,
+        filters: [sel("Season", ["All seasons"]), sel("Road", ["All roads", ...new Set(farm.parts.map(p => p.road).filter(Boolean))]), sel("View", ["Month", "Week"])],
+        kpis: [{ label: "Cuts recorded", value: 0 }, { label: "Work records", value: 0 }, { label: "Next cut", value: NS, hint: "Readiness is not inferred" }],
         tables: [{ title: "Cuts and work by week", columns: ["Week", "Pivot", "Work", "Status"], rows: [], empty: "No persisted work or cut records" }],
-        notes: ["Only recorded seasons and cuts are shown. Readiness is not inferred."],
+        notes: ["Only recorded seasons and cuts are shown."],
       };
     case "plans":
       return {
         title: "Plans", subtitle: `${farm.name} · saved farm plans`,
-        kpis: [{ label: "Plans", value: 0, hint: "Returned by the plans service" }, { label: "Draft", value: 0 }, { label: "Season", value: NS, hint: "Not selected" }],
-        tables: [{ title: "Farm plans", columns: ["Status", "Plan", "Name", "Steps", "Range", "Created"], rows: [], empty: "No saved plans" }],
-        notes: ["Bulk proposal generation is unavailable. Only persisted plan records are shown."],
+        actions: [btn("+ New plan", "Plan creation is not available in this demo")],
+        filters: [sel("Season", ["All seasons"]), { kind: "button", label: "Generate proposal", disabled: true, hint: "Bulk proposal generation is unavailable. Open a saved draft to run its server preview." }],
+        kpis: [{ label: "Plans", value: 0, hint: "Returned by the native plans service" }, { label: "Draft", value: 0 }, { label: "Generated", value: 0 }, { label: "Season", value: NS, hint: "All plans · all seasons" }],
+        tables: [
+          { title: "Templates", columns: ["Template", "Steps"], rows: [], empty: "No template catalogue is exposed by the native plans service." },
+          { title: "Farm plans", columns: ["Status", "Plan", "Name", "Steps", "Range", "Day 0 or trigger", "Created"], rows: [], empty: "No saved plans", sub: "The native plans endpoint returned no plans for this season." },
+        ],
+        notes: ["Only persisted plan records are shown. Scenario and lease state come from the native service; field geometry does not imply an active lease."],
       };
     case "dispatch":
       return {
-        title: "Tasks & dispatch", subtitle: `${farm.name} · task and resource bookings`,
+        title: "Tasks & dispatch", subtitle: `${farm.name} · native task and resource bookings`,
+        actions: [btn("Publish to operators", "No authorized dispatch publish mutation is available. The board will not send messages."), btn("Print dispatch sheet")],
+        filters: [{ kind: "seg", options: ["Next 72 hours", "Tonight"], value: "Next 72 hours" }],
         kpis: [
-          { label: "Tasks today", value: 0 },
-          { label: "Tractor-hours, next 48 h", value: NS, hint: "Booking duration not returned" },
-          { label: "Conflicts", value: 0 },
-          { label: "Operators on shift", value: NS, hint: "No shift roster connected" },
+          { label: "Tasks today", value: 0, hint: "Open native task records" },
+          { label: "Tractor-hours, next 48 h", value: NS, hint: "Booking duration data is not returned" },
+          { label: "Conflicts", value: 0, hint: "Native dispatch checks for this window" },
+          { label: "Window breaches, 72 h", value: NS, hint: "No window-breach summary is available" },
+          { label: "Operators on shift", value: NS, hint: "No shift roster is connected" },
         ],
         tables: [
-          { title: "Dispatch board · by tractor", columns: ["Resource", "Day 1", "Day 2", "Day 3"], rows: [], empty: "No resource bookings returned" },
-          { title: "Farm tasks", columns: ["Task", "Status", "Type", "Field part", "Due"], rows: [], empty: "No tasks" },
+          { title: "Dispatch board · by tractor", columns: ["Resource", "Day 1", "Day 2", "Day 3"], rows: [], empty: "No resource bookings returned", sub: "Booking requires dispatch write access." },
+          { title: "Dispatch conflicts and required actions", columns: ["Level", "Conflict / required action", "Task"], rows: [], empty: "No conflicts returned" },
+          { title: "Dispatch checks", columns: ["Check", "Result", "Detail"], rows: [], empty: "No check details returned" },
+          { title: "Tasks awaiting a resource slot", columns: ["Task", "Work", "Pivot", "Due", "Night · finish"], rows: [], empty: "No tasks waiting for a slot" },
+          { title: "Farm tasks", columns: ["Task", "Status", "Type", "Field part", "Planned start", "Due", "Assigned user ID"], rows: [], empty: "No tasks" },
         ],
-        notes: ["Assignments are explicit booking records; never inferred from a machine's last GPS position."],
+        notes: ["Resource assignments are explicit booking records. They are never inferred from a machine's last GPS position."],
       };
     case "press-yard":
       return {
-        title: "Harvest & press yard", subtitle: `${farm.name} · intake, pressing, lots`,
+        title: "Harvest & press yard", subtitle: `${farm.name} · intake, pressing, lot genealogy and dispatch status`,
+        actions: [btn("Open existing harvest entry")],
         kpis: [
-          { label: "Weighbridge intake", value: NS, hint: "No farm-wide ticket projection" },
-          { label: "Presses · capacity", value: NS },
-          { label: "Lots in the yard", value: NS },
-          { label: "Grade mix", value: NS },
+          { label: "Weighbridge intake", value: NS, hint: "No farm-wide ticket projection; intake is per pivot" },
+          { label: "Presses · current capacity", value: NS, hint: "No press telemetry or production status feed" },
+          { label: "Lots in the yard", value: NS, hint: "No yard inventory or lot-genealogy source" },
+          { label: "Grade mix · season", value: NS, hint: "No yard grading or season aggregate source" },
         ],
-        tables: [{ title: "Weighbridge intake today", columns: ["Ticket", "Pivot", "Net wet, t", "Moisture, %", "t @ 13 %", "Lot"], rows: [], empty: "No farm-wide weighbridge tickets are available" }],
-        notes: ["Read-only page. Receiving, pressing, grading and dispatch are not performed here."],
+        tables: [
+          { title: "Weighbridge intake today", columns: ["Ticket · time", "Pivot", "Load", "Net wet, t", "Field meter, %", "Yard moisture, %", "t @ 13 %", "Lot"], rows: [], empty: "No farm-wide weighbridge tickets are available" },
+          { title: "Presses · now", columns: ["Press line", "Current state", "Capacity", "Shift output", "Queue", "Power / availability"], rows: [[NS, NS, NS, NS, NS, NS]], empty: "" },
+          { title: "Lots in the yard", columns: ["Lot", "From", "Form", "t @ 13 %", "Days in yard", "Feed moisture, % (tested)", "CP in bale, %", "Grade", "PY/IN", "Status"], rows: [], empty: "Yard lots are unavailable" },
+          { title: "New press lot · preview", columns: ["Field lot", "Target press lot", "Input t @ 13 %", "Output / waste", "Press line", "Run status"], rows: [[NS, NS, NS, NS, NS, NS]], empty: "" },
+          { title: "Season grade mix (التصنيف)", columns: ["Grade", "Lots", "t @ 13 %", "Share"], rows: [], empty: "Season grade data is unavailable" },
+          { title: "Intake plan · next 3 nights", columns: ["Night", "Pivot", "Route", "Expected t @ 13 %", "Lot", "Status"], rows: [], empty: "No intake plan is connected" },
+        ],
+        notes: ["Receiving a field lot, creating PY/IN stock, pressing, grade confirmation, bale labels and dispatch are not performed by this read-only page."],
       };
     case "machinery":
       return {
-        title: "Machinery", subtitle: `${farm.name} · GPS tracker positions only`,
+        title: "Machinery (خط المعدات)", subtitle: `${farm.name} · GPS tracker positions only`,
+        actions: [btn("+ New machine", "The connected fleet source does not expose machine registration."), btn("Full report", "No full fleet report feed is connected.")],
         kpis: [
           { label: "Working now", value: NS, hint: "GPS position does not prove machine operation" },
-          { label: "Tractor hours · season", value: NS },
-          { label: "Diesel · season", value: NS },
-          { label: "Service due · 30 h", value: NS },
+          { label: "Tractor hours · season", value: NS, hint: "No hour-meter source is connected" },
+          { label: "Diesel · season", value: NS, hint: "No fuel-consumption feed is connected" },
+          { label: "Service due · 30 h", value: NS, hint: "Service schedules are not supplied" },
+          { label: "Hired tractor-hours", value: NS, hint: "No hired-hour ledger is connected" },
         ],
-        tables: [{
-          title: "Farm machinery GPS positions", columns: ["Code", "Machine", "Hours, season", "Diesel, l", "GPS", "State"],
-          rows: db.fleet.map(m => [m.code, m.name, NS, NS, `${m.lat}, ${m.lon}`, `Offline · stale ${m.lastFixDays} d`]), empty: "No trackers",
-        }],
-        notes: ["No hour-meter or fuel feed is connected."],
+        tables: [
+          { title: "Farm machinery GPS positions", sub: `${db.fleet.length} tracker records · GPS only`, columns: ["Code", "Machine", "Owner", "Now", "Hours, season", "Diesel, l", "Next service", "GPS", "Route"],
+            rows: db.fleet.map(m => [m.code, m.name, NS, `Offline · stale ${m.lastFixDays} d`, NS, NS, NS, `${m.lat}, ${m.lon}`, NS]), empty: "No trackers" },
+          { title: "Harvest line capacity check", columns: ["Job", "Need", "Capacity at the settings", "Observed · last 10 sessions", "Gap"], rows: [], empty: "Capacity inputs are unavailable" },
+          { title: "Night collection capacity by road", columns: ["Road", "Parts fed", "km to road", "Cycle, min", "Loads per part (cut)", "Nights with available wagons", "Route capacity in one night", "Suggested"], rows: [], empty: "Road collection estimates are unavailable" },
+          { title: "Harvest line account · season to date", columns: ["Source", "Basis", "Actual, EGP"], rows: [], empty: "Harvest line account is unavailable" },
+        ],
+        notes: ["No capacity or gap is calculated. Actual cost is not inferred from machine fuel or GPS activity."],
       };
     case "contractors":
       return {
-        title: "Contractors", subtitle: `${farm.name} · work orders, rates and bills for hired services`,
+        title: "Contractors (مقاولين)", subtitle: `${farm.name} · work orders, rates, billing basis and bills for hired services`,
+        actions: [btn("+ New work order"), btn("Export", "No audited contractor or work-order export is available from the connected sources.")],
         kpis: [
-          { label: "Active contractors", value: NS },
-          { label: "Work orders", value: 0 },
-          { label: "Draft vendor bills", value: db.submissions.filter(s => s.bill).length, hint: "Created from approved mobile activity" },
-          { label: "On-time rate", value: NS },
+          { label: "Active contractors", value: NS, hint: "Counted only where a contractor status is returned" },
+          { label: "Work orders", value: 0, hint: "Native work orders returned for the current filter" },
+          { label: "Draft vendor bills", value: bills, hint: "Created from approved mobile activity" },
+          { label: "On-time rate", value: NS, hint: "No measured contractor performance feed is connected" },
         ],
-        tables: [{ title: "Contractor work orders", columns: ["WO", "Contractor", "Work", "Pivot", "When", "Status"], rows: [], empty: "No work orders returned" }],
-        notes: ["Completion requires a confirmed linked operation. This view does not post vendor bills or stock."],
+        tables: [
+          { title: "Contractor services, rates and payment status", columns: ["Contractor", "Service", "Rates", "Billing basis", "Volume", "Billed, EGP", "Paid, EGP", "Status"], rows: [], empty: "No contractor records returned. Rates, billing and payment status remain unknown." },
+          { title: "Contractor work orders", columns: ["WO", "Contractor", "Work", "Pivot", "When", "Billing basis · quantity", "Status"], rows: [], empty: "No work orders returned" },
+        ],
+        filters: [{ kind: "text", label: "Search records" }, sel("Status", ["All statuses", "Draft", "Ordered", "In progress", "Done", "Canceled"])],
+        notes: ["Work orders record hired services. Completion requires a confirmed linked operation. This view does not post vendor bills or stock.", "Rules · Rates: contract-rate source is not connected. Billing basis: only the recorded basis and quantity. Costing: harvest-line and pivot analytic mappings are not part of this projection."],
       };
     case "inventory":
       return {
-        title: "Inventory (Odoo)", subtitle: `${farm.name} · stock and demand`,
-        kpis: [{ label: "Products tracked", value: NS }, { label: "Short in 14 days", value: NS }, { label: "Inputs on hand", value: NS }],
-        tables: [{ title: "Stock and 14-day demand", columns: ["Product", "Location", "On hand", "Reserved", "Planned use 14 d", "Cover, days"], rows: [], empty: "Inventory feed unavailable" }],
-        notes: ["Stock values stay unknown until supplied by Odoo."],
+        title: "Inventory (Odoo)", subtitle: `${farm.name} · stock, demand from the plan, allocation of short inputs and documents exchanged with Odoo`,
+        actions: [btn("+ New purchase request", "Purchase requests are not writable from this connected view."), btn("Open in Odoo", "No authorized Odoo destination was supplied.")],
+        kpis: [
+          { label: "Products tracked", value: NS, hint: "Inventory / Odoo stock feed unavailable" },
+          { label: "Short in 14 days", value: NS, hint: "Plan demand and stock data are not connected" },
+          { label: "Hay at AVCO", value: NS, hint: "No Odoo valuation layers available" },
+          { label: "Inputs on hand", value: NS, hint: "Warehouse quantities are not available" },
+        ],
+        tables: [
+          { title: "Stock and 14-day demand", sub: "Odoo · read only · Odoo sync: Not supplied · Cache age: Not supplied", columns: ["Product", "Location", "On hand", "Reserved", "Planned use 14 d", "Cover, days", "Action"], rows: [], empty: "Inventory feed unavailable" },
+          { title: "Allocation priorities", columns: ["Priority", "Part / group", "Operation", "Date", "Need, kg", "Allocated, kg", "Short, kg"], rows: [], empty: "No inventory allocations supplied" },
+          { title: "Documents to and from Odoo", columns: ["Document", "Type", "State", "Date"], rows: [], empty: "Odoo documents are not connected" },
+        ],
+        notes: ["Stock values stay unknown until supplied by Odoo. Demand calculation cannot be displayed without live planned operations and plan-step inputs."],
       };
     case "people":
       return {
-        title: "People (Odoo HR)", subtitle: `${farm.name} · who is on the farm today`,
-        kpis: [{ label: "Headcount", value: NS }, { label: "On shift now", value: NS }, { label: "Overtime this week", value: NS }],
-        tables: [{ title: "Team by role", columns: ["Role", "Headcount", "Present", "Leave / absent"], rows: [], empty: "People records are not connected" }],
-        notes: ["Names and employee records remain in Odoo HR."],
+        title: "People (Odoo HR)", subtitle: `${farm.name} · who is on the farm today and what they are assigned to`,
+        actions: [btn("Open in Odoo", "No authorized Odoo HR destination was supplied.")],
+        kpis: [
+          { label: "Headcount", value: NS, hint: "Odoo HR department feed unavailable" },
+          { label: "On shift now", value: NS, hint: "Attendance feed unavailable" },
+          { label: "Field crew on shift", value: NS, hint: "Staff assignment feed unavailable" },
+          { label: "Overtime this week", value: NS, hint: "No attendance-hours feed" },
+        ],
+        tables: [{ title: "Team by role · today", sub: "Odoo HR · read only", columns: ["Role", "Headcount", "Present", "Leave / absent", "Assignment"], rows: [], empty: "People records are not connected" }],
+        notes: ["Data boundary: names and employee records remain in Odoo HR. Personal and pay data are not read here."],
       };
     case "remote-sensing": {
       const known = farm.parts.filter(p => p.ndvi !== null);
       return {
-        title: "Remote sensing", subtitle: `${farm.name} · scene products and field-part status`,
+        title: "Remote sensing", subtitle: `${farm.name} · scene products, crop-cycle estimates and field-part status`,
+        actions: [btn("Export", "Export is unavailable until the farm export format is configured.")],
         kpis: [
-          { label: "Parts with NDVI", value: `${known.length} of ${farm.parts.length}` },
+          { label: "Latest worker status", value: db.scenes[0].date, hint: "Run " + db.scenes[0].date },
           { label: "Standing DM", value: NS, hint: "0 parts with a supported estimate" },
-          { label: "Latest usable scene", value: db.scenes[1].date },
+          { label: "Season DM cumulative", value: NS, hint: "Partial totals stay flagged" },
+          { label: "Open remote-sensing alerts", value: 0, hint: "0 cut-log entries in the last 7 days" },
         ],
+        map: { layers: ["NDVI", "Daily DM", "Season DM", "Leaf N estimate", "CP in bale estimate", "Canopy water status", "NDVI variability"], scenes: db.scenes.map(s => `${s.date} · ${s.sat} · ${s.note} · cloud ${s.cloud}%`), known: known.length, total: farm.parts.length },
         tables: [
-          { title: "Scenes", columns: ["Date", "Satellite", "Condition", "Cloud %"], rows: db.scenes.map(s => [s.date, s.sat, s.note, s.cloud]), empty: "No scenes" },
-          { title: "Field-part status", columns: ["Field part", "NDVI", "Daily DM", "Cut timing"], rows: farm.parts.map(p => [p.id, p.ndvi, NS, "no_cycle"]), empty: "No parts" },
+          { title: "Pipeline and scene coverage", columns: ["Last run", "Worker", "Weather source", "Next expected passes", "Latest usable scene", "Scene records"], rows: [[db.scenes[0].date, "1.2.0", "nasa_power", 5, `${db.scenes[1].date} · ${db.scenes[1].sat}`, `${db.scenes.length} recent`]], empty: "" },
+          { title: "Scenes", columns: ["Date", "Satellite", "Condition", "Cloud %", "Delivered layers"], rows: db.scenes.map(s => [s.date, s.sat, s.note, s.cloud, "cloud_mask · ndvi · ndmi · ndre · true_colour"]), empty: "No scenes" },
+          { title: "Daily and cumulative dry matter", columns: ["Standing DM, farm total", "Standing hay estimate", "Season DM cumulative", "Season hay estimate"], rows: [[NS, NS, NS, NS]], empty: "" },
+          { title: "Leaf N and crude protein estimates", columns: ["Leaf N estimate", "CP in bale estimate"], rows: [[NS, NS]], empty: "" },
+          { title: "Field-part status", sub: `As of ${db.scenes[0].date}`, columns: ["Field part", "Image / data state", "Daily DM", "Season DM", "Leaf N estimate", "CP in bale estimate", "Cut timing", "NDVI"],
+            rows: farm.parts.map(p => [p.id, `fresh · ${db.scenes[1].date}`, NS, NS, NS, NS, "no_cycle", p.ndvi]), empty: "No parts" },
         ],
-        notes: ["Values are part means, not per-pixel. Missing data stays unknown; no zero is substituted."],
+        notes: [`NDVI values for ${known.length} of ${farm.parts.length} parts. Values are part means, not per-pixel measurements. Missing data stays unknown; no zero is substituted. These are model estimates, not lab results.`],
       };
     }
     case "soil":
       return {
-        title: "Soil management", subtitle: `${farm.name} · study reference · read only`, kpis: [], tables: [], restricted: true,
-        notes: ["Soil management requires an explicitly assigned farm role. Access is not inferred from farm write permissions."],
+        title: "Soil management", subtitle: `${farm.name} · study reference · read only`, restricted: true,
+        tabs: ["Overview", "Operation progress", "Sampling", "Zones", "Salinity & water", "Nutrient budget", "Amendments & soil health"],
+        kpis: [], tables: [],
+        notes: ["Soil management requires an explicitly assigned farm role. Administrator access is available; this session's soil-role mapping is not configured.", "The soil reference feed is restricted by the server to its permitted portal administrators. Access is not inferred from farm write permissions."],
       };
     case "reports":
       return {
-        title: "Reports", subtitle: `${farm.name} · recorded operational data and exports`, kpis: [],
-        tables: [{
-          title: "Standard reports", columns: ["Report", "Filters", "Excel", "PDF"],
-          rows: ["Work report", "Application report", "Harvest & lots", "Press yard", "Machinery productivity", "Cost per pivot and per t hay", "Water", "Soil & tissue", "Alerts and response time"].map(n => [n, "—", "Unavailable", "Unavailable"]),
-          empty: "",
-        }],
+        title: "Reports", subtitle: `${farm.name} · recorded operational data and exports`,
+        actions: [btn("+ New schedule", "Report scheduling is not available from the connected feeds.")],
+        cards: [
+          ["Work report", "Area done by work type, pivot and week; vs plan", "Season · week · road"],
+          ["Application report", "Planned vs actual rate per product and pivot, deviation %", "Programme · product"],
+          ["Harvest & lots", "Cuts, weighbridge, t @ 13 %, CP in bale, grade, lots and genealogy", "Season · cut · route"],
+          ["Press yard", "Intake, pressing, waste, bale serials, dispatch", "Day · week · lot"],
+          ["Machinery productivity", "Hours, fed/h observed vs setting, idle, fuel per fed, service", "Machine · operator"],
+          ["Harvest line account", "Norm credited vs Odoo actuals by source, variance per t", "Month · source"],
+          ["Cost per pivot and per t hay", "Plan, forecast, paid/posted by line; break-even", "Rent year · pivot"],
+          ["Water", "Applied vs ETc, m³ per t, pressure faults, irrigation-off days", "Pivot · cut cycle"],
+          ["Soil & tissue", "Results by pivot and depth, trends, follow-ups", "Plan · season"],
+          ["Alerts and response time", "Alerts opened, time to task, time to close", "Type · month"],
+        ].map(([title, desc, filters]) => ({ title, desc, filters, note: "No matching report output is supplied by the connected source." })),
+        tables: [{ title: "Scheduled", columns: ["Report", "To", "When", "Format"], rows: [], empty: "No schedules supplied", sub: "Schedule names and cadence in the reference are not live schedules in this farm." }],
+        datasets: ["Recorded field operations", "Tasks and assignments", "Recorded irrigation passes", "Recorded scouting observations", "Sampling plan register"],
         exports: ["submissions"],
-        notes: ["Native records can be exported as CSV. Unconnected economics and stock valuations are not included."],
+        notes: ["Report catalogue: preview records supplied by the farm reporting service. Persisted native Farm records only. Odoo stock, HR, valuation, profitability, satellite and telemetry coverage are not supplied by these reports."],
       };
     default:
       return null;
@@ -276,7 +350,7 @@ function createApp() {
         farm: farm.key, pivots: farmTotals(farm).pivots, partCount: farmTotals(farm).parts, fed: farmTotals(farm).fed, mapStatusKnown: 0,
         center: geo(0, 0), radiusM: 290, roads: [...new Set(farm.parts.map(p => p.road).filter(Boolean))],
         fleet: db.fleet.map((m, i) => ({ code: m.code, name: m.name, ...geo(-0.6 - i * 0.5, 0.5 + i * 0.7), lastFixDays: m.lastFixDays, online: m.online })),
-        parts: farm.parts.map(p => ({ id: p.id, pivot: p.pivot, part: p.part, crop: p.crop, areaFed: p.areaFed, x: p.x, y: p.y, r: p.rPx, ...geo((p.x - 80) / 130, (p.y - 80) / 130), status: null })),
+        parts: farm.parts.map(p => ({ id: p.id, pivot: p.pivot, part: p.part, crop: p.crop, areaFed: p.areaFed, x: p.x, y: p.y, r: p.rPx, ...geo((p.x - 80) / 130, (p.y - 80) / 130), ndvi: p.ndvi, road: p.road, status: null })),
       });
     }
 
@@ -336,6 +410,16 @@ function createApp() {
       s.status = "approved"; s.rate_per_fed = rate;
       s.bill = { id: "BILL-" + String(s.id).padStart(4, "0"), state: "draft", amount: Math.round(rate * part.areaFed * 100) / 100 };
       return json(200, { submission: s, note: "Draft vendor bill only. Not posted; no inventory moved." });
+    }
+
+    if (method === "GET" && path === "/api/reports/preview") {
+      const { dataset, from, to } = query;
+      if (!isDate(from || "") || !isDate(to || "")) return json(400, { errors: ["from and to must be YYYY-MM-DD"] });
+      if (Date.parse(to) <= Date.parse(from)) return json(400, { errors: ["to must be after from (end exclusive)"] });
+      const columns = ["ID", "Operation", "Pivot", "Part", "Season", "Work type", "Status", "Actual start UTC", "Recorded completed fed", "Source"];
+      const rows = dataset && dataset !== "Recorded field operations" ? [] : db.submissions.filter(s => s.work_date >= from && s.work_date < to)
+        .map(s => [s.id, s.operation, s.pivot, s.part, null, null, s.status, s.recorded_at, null, "mobile app"]);
+      return json(200, { dataset: dataset || "Recorded field operations", columns, rows, total: rows.length, generated: new Date().toISOString() });
     }
 
     if (method === "GET" && path === "/api/reports/export") {

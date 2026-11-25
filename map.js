@@ -111,4 +111,17 @@
     };
     setTimeout(() => map.invalidateSize(), 100);
   };
+
+  // Small satellite map for Remote sensing: parts coloured by layer (only NDVI has values here).
+  window.renderNdviMap = function (el, spec, m, layer) {
+    el.innerHTML = '<div id="rsmap" style="height:100%"></div>';
+    const map = L.map("rsmap", { zoomControl: true, attributionControl: false }).setView([m.center.lat, m.center.lon], 14);
+    L.tileLayer(ESRI, { maxNativeZoom: 17, maxZoom: 18 }).addTo(map);
+    L.control.attribution({ prefix: false }).addAttribution("Tiles © Esri · part-average map, not a 10 m pixel raster").addTo(map);
+    const color = v => v == null ? "#9aa0a6" : v < 0.5 ? "#d9534f" : v < 0.65 ? "#f0ad4e" : "#2e8b57";
+    m.parts.forEach(p => L.polygon(half(p, m.radiusM, p.part), { color: "#fff", weight: 1.5, fillOpacity: 0.7, fillColor: layer === "NDVI" ? color(p.ndvi) : "#9aa0a6" })
+      .bindTooltip(p.id + " · " + (layer === "NDVI" && p.ndvi != null ? "NDVI " + p.ndvi : "Unknown")).addTo(map));
+    map.fitBounds(L.latLngBounds(m.parts.map(p => [p.lat, p.lon])).pad(0.2));
+    setTimeout(() => map.invalidateSize(), 100);
+  };
 })();
