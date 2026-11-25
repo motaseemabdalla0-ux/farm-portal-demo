@@ -1,124 +1,146 @@
 (function(){
 const defs={},cache={};
 function req(n){n=n.replace('./','');if(cache[n])return cache[n].exports;const m={exports:{}};cache[n]=m;defs[n](m,m.exports,req);return m.exports}
-defs["seed"]=function(module,exports,require){
-// Demo data. Pivot codes are anonymised (D1-001 ...); all other values (status, hay, contractors, submissions) are synthetic.
-// Farm 1 uses real pivot positions (lib/geometry.js); farm 2 is a synthetic layout.
-// Convention copied from the real portal: a value nobody supplied is null (shown as "Not supplied"), never 0.
+defs["app"]=function(module,exports,require){
+const { buildDb, ops } = require("./seed");
+const { pageFor, farmTotals, SLUGS } = require("./pages");
 
-function rng(seed) { let s = seed; return () => (s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296; }
+const PAGE_SIZE = 25;
 
-const GEO = require("./geometry");
-const M = 111320;
-
-// Farm 1: pivot circles at their real positions, anonymised codes.
-function buildRealFarm(key, name, seed) {
-  const r = rng(seed);
-  const rows = GEO.split(";").map(x => x.split(","));
-  const parts = rows.map(([c, part, crop, area, lat, lon, rad]) => {
-    const n = Number(c);
-    return {
-      pivot: `D1-${c}`, part, id: `D1-${c}-${part}`,
-      crop: crop === "a" ? "alfalfa" : crop === "w" ? "wheat" : null,
-      road: n >= 46 && n <= 55 ? "C03" : null,
-      areaFed: Number(area), lat: Number(lat), lon: Number(lon), radiusM: Number(rad),
-      ndvi: r() < 0.37 ? Math.round((0.35 + r() * 0.5) * 100) / 100 : null, // 27 of 74 parts have values in the real portal
-      leased: null, stage: null,
-    };
-  });
-  const minLon = Math.min(...parts.map(p => p.lon)), maxLat = Math.max(...parts.map(p => p.lat));
-  parts.forEach(p => { p.x = 60 + (p.lon - minLon) * M * 0.92 / 8; p.y = 60 + (maxLat - p.lat) * M / 8; p.rPx = p.radiusM / 8; });
-  return { key, name, parts };
+function centerOf(farm) {
+  const n = farm.parts.length;
+  return { lat: farm.parts.reduce((t, p) => t + p.lat, 0) / n, lon: farm.parts.reduce((t, p) => t + p.lon, 0) / n };
 }
 
-// synthetic location for farm 2 (open desert with imagery coverage)
-const BASE = { lat: 22.9, lon: 29.4 };
-function geoOf(east, north) {
-  const lat = BASE.lat + north / M;
-  return { lat: Math.round(lat * 1e6) / 1e6, lon: Math.round((BASE.lon + east / (M * Math.cos(lat * Math.PI / 180))) * 1e6) / 1e6 };
-}
+function createApp() {
+  const db = buildDb();
+  const farmOf = key => db.farms.find(f => f.key === key) || db.farms[0];
+  const json = (status, body) => ({ status, type: "application/json; charset=utf-8", body: JSON.stringify(body) });
+  const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s));
+  const findPart = (farm, pivot, part) => farm.parts.find(p => p.pivot === pivot && (!part || p.part === part));
 
-function buildFarm(key, name, prefix, seed) {
-  const r = rng(seed);
-  const parts = [];
-  let n = 0;
-  // Three irregular blocks of staggered (hex-like) rows with small jitter, so the map does not look like a grid.
-  // east/north are metres from the farm origin; x/y are only used by the plain SVG fallback.
-  const blocks = [{ ox: 0, oy: 0 }, { ox: 5200, oy: 900 }, { ox: 1800, oy: -2300 }];
-  const SPX = 680, SPY = 600, ROWS = 3, COLS = 7;
-  for (const b of blocks) {
-    for (let row = 0; row < ROWS && n < 62; row++) {
-      for (let col = 0; col < COLS && n < 62; col++) {
-        n++;
-        const east = b.ox + col * SPX + (row % 2) * (SPX / 2) + (r() - 0.5) * 60;
-        const north = b.oy - row * SPY + (r() - 0.5) * 60;
-        const code = `${prefix}-${String(n).padStart(3, "0")}`;
-        const kinds = n % 5 === 0 ? ["E", "W"] : ["F"]; // 62 pivots, 12 split in two = 74 parts (same counts as the real farm)
-        for (const part of kinds) {
-          parts.push({
-            pivot: code, part, id: `${code}-${part}`,
-            crop: r() < 0.7 ? "alfalfa" : "wheat",
-            road: r() < 0.4 ? "C03" : null,
-            areaFed: Math.round((part === "F" ? 66 : 33) * (0.9 + r() * 0.2) * 10) / 10,
-            east, north, x: 80 + east / 6, y: 300 - north / 6, rPx: 48,
-            ...geoOf(east, north), radiusM: 290,
-            ndvi: r() < 0.37 ? Math.round((0.35 + r() * 0.5) * 100) / 100 : null, // 27 of 74 parts have values in the real portal
-            leased: null, stage: null,
-          });
-        }
-      }
+  function validateSubmission(b, farm) {
+    const errors = [];
+    if (typeof b.client_ref !== "string" || !b.client_ref.trim() || b.client_ref.length > 64) errors.push("client_ref required (max 64 chars)");
+    if (!ops.includes(b.operation)) errors.push("operation must be one of: " + ops.join(", "));
+    if (!findPart(farm, b.pivot, b.part)) errors.push("unknown pivot/part");
+    if (typeof b.contractor !== "string" || !b.contractor.trim()) errors.push("contractor required");
+    if (typeof b.work_date !== "string" || !isDate(b.work_date)) errors.push("work_date must be YYYY-MM-DD");
+    return errors;
+  }
+
+  function handle({ method, path, query = {}, headers = {}, body }) {
+    const role = String(headers["x-role"] || "viewer").toLowerCase();
+    const farm = farmOf(query.farm);
+
+    if (method === "GET" && path === "/api/health") return json(200, { status: "ok" });
+    if (method === "GET" && path === "/api/farms") return json(200, db.farms.map(f => ({ key: f.key, name: f.name, ...farmTotals(f) })));
+
+    if (method === "GET" && path === "/api/map") {
+      return json(200, {
+        farm: farm.key, pivots: farmTotals(farm).pivots, partCount: farmTotals(farm).parts, fed: farmTotals(farm).fed, mapStatusKnown: 0,
+        center: centerOf(farm), radiusM: 290, roads: [...new Set(farm.parts.map(p => p.road).filter(Boolean))],
+        fleet: farm.key === "demo" ? db.fleet.map(m => ({ code: m.code, name: m.name, lat: m.lat, lon: m.lon, lastFixDays: m.lastFixDays, online: m.online })) : [],
+        parts: farm.parts.map(p => ({ id: p.id, pivot: p.pivot, part: p.part, crop: p.crop, areaFed: p.areaFed, x: p.x, y: p.y, r: p.rPx, lat: p.lat, lon: p.lon, radiusM: p.radiusM, ndvi: p.ndvi, road: p.road, status: null })),
+      });
     }
+
+    if (method === "GET" && path === "/api/pivots") {
+      const q = (query.q || "").toLowerCase();
+      const rows = farm.parts
+        .filter(p => (!query.crop || p.crop === query.crop) && (!query.road || p.road === query.road) && (!q || p.id.toLowerCase().includes(q)))
+        .map(p => ({ id: p.id, pivot: p.pivot, part: p.part, crop: p.crop, road: p.road, areaFed: p.areaFed, stage: null, hay: null, cp: null, ndvi: p.ndvi, leased: null }));
+      return json(200, { total: rows.length, rows });
+    }
+
+    const page = path.match(/^\/api\/pages\/([a-z-]+)$/);
+    if (method === "GET" && page) {
+      if (!SLUGS.includes(page[1])) return json(404, { error: "unknown page" });
+      return json(200, pageFor(page[1], farm, db));
+    }
+
+    if (method === "GET" && path === "/api/mobile/submissions") {
+      const all = db.submissions.filter(s => (!query.status || s.status === query.status) && (!query.pivot || s.pivot === query.pivot));
+      const total = all.length;
+      const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+      const p = Math.min(Math.max(parseInt(query.page || "1", 10) || 1, 1), pages);
+      const rows = all.slice().sort((a, b) => b.recorded_at.localeCompare(a.recorded_at) || b.id - a.id).slice((p - 1) * PAGE_SIZE, p * PAGE_SIZE);
+      return json(200, { total, page: p, pages, rows, canReview: role === "reviewer" });
+    }
+
+    if (method === "POST" && path === "/api/mobile/submissions") {
+      const b = body || {};
+      const existing = db.submissions.find(s => s.client_ref === b.client_ref);
+      if (existing) return json(200, { duplicate: true, submission: existing }); // idempotent: same client_ref never creates a 2nd record
+      const errors = validateSubmission(b, farm);
+      if (errors.length) return json(400, { errors });
+      const rec = {
+        id: db.nextId++, client_ref: b.client_ref, status: "new", operation: b.operation, pivot: b.pivot, part: b.part || null,
+        contractor: b.contractor, operator: b.operator || "operator.demo", work_date: b.work_date,
+        recorded_at: new Date().toISOString(), rate_per_fed: null, bill: null, reason: null,
+      };
+      db.submissions.push(rec);
+      return json(201, { duplicate: false, submission: rec });
+    }
+
+    const act = path.match(/^\/api\/mobile\/submissions\/(\d+)\/(approve|reject)$/);
+    if (method === "POST" && act) {
+      if (role !== "reviewer") return json(403, { error: "Review actions are unavailable for your current role." });
+      const s = db.submissions.find(x => x.id === Number(act[1]));
+      if (!s) return json(404, { error: "not found" });
+      if (s.status !== "new") return json(409, { error: `already ${s.status}` });
+      const b = body || {};
+      if (act[2] === "reject") {
+        if (typeof b.reason !== "string" || !b.reason.trim()) return json(400, { errors: ["reason required"] });
+        s.status = "rejected"; s.reason = b.reason.trim();
+        return json(200, { submission: s });
+      }
+      const rate = Number(b.rate_per_fed);
+      if (!Number.isFinite(rate) || rate <= 0) return json(400, { errors: ["rate_per_fed must be a positive number"] });
+      const part = findPart(farm, s.pivot, s.part) || { areaFed: 0 };
+      s.status = "approved"; s.rate_per_fed = rate;
+      s.bill = { id: "BILL-" + String(s.id).padStart(4, "0"), state: "draft", amount: Math.round(rate * part.areaFed * 100) / 100 };
+      return json(200, { submission: s, note: "Draft vendor bill only. Not posted; no inventory moved." });
+    }
+
+    if (method === "GET" && path === "/api/reports/preview") {
+      const { dataset, from, to } = query;
+      if (!isDate(from || "") || !isDate(to || "")) return json(400, { errors: ["from and to must be YYYY-MM-DD"] });
+      if (Date.parse(to) <= Date.parse(from)) return json(400, { errors: ["to must be after from (end exclusive)"] });
+      const columns = ["ID", "Operation", "Pivot", "Part", "Season", "Work type", "Status", "Actual start UTC", "Recorded completed fed", "Source"];
+      const rows = dataset && dataset !== "Recorded field operations" ? [] : db.submissions.filter(s => s.work_date >= from && s.work_date < to)
+        .map(s => [s.id, s.operation, s.pivot, s.part, null, null, s.status, s.recorded_at, null, "mobile app"]);
+      return json(200, { dataset: dataset || "Recorded field operations", columns, rows, total: rows.length, generated: new Date().toISOString() });
+    }
+
+    if (method === "GET" && path === "/api/reports/export") {
+      const { from, to } = query;
+      if (!isDate(from || "") || !isDate(to || "")) return json(400, { errors: ["from and to must be YYYY-MM-DD"] });
+      if (Date.parse(to) <= Date.parse(from)) return json(400, { errors: ["to must be after from (end exclusive)"] });
+      const head = ["id", "operation", "pivot", "part", "contractor", "work_date", "status"];
+      const rows = db.submissions.filter(s => s.work_date >= from && s.work_date < to)
+        .map(s => head.map(h => `"${String(s[h] ?? "").replace(/"/g, '""')}"`).join(","));
+      return { status: 200, type: "text/csv; charset=utf-8", body: [head.join(","), ...rows].join("\n") };
+    }
+
+    return json(404, { error: "not found" });
   }
-  // Normalise so the farm total equals the real farm's 4,875.5 fed.
-  const total = parts.reduce((t, p) => t + p.areaFed, 0), k = 4875.5 / total;
-  parts.forEach(p => { p.areaFed = Math.round(p.areaFed * k * 10) / 10; });
-  const diff = Math.round((4875.5 - parts.reduce((t, p) => t + p.areaFed, 0)) * 10) / 10;
-  parts[parts.length - 1].areaFed = Math.round((parts[parts.length - 1].areaFed + diff) * 10) / 10;
-  return { key, name, parts };
+
+  return { handle, db };
 }
 
-const ops = ["سطارة", "بدارة", "ديسك مع زحافة", "تسوية زحافة"];
-const contractors = ["مقاول تجريبي 1", "مقاول تجريبي 2", "مقاول تجريبي 3"];
+module.exports = { createApp };
 
-function buildSubmissions(parts) {
-  const r = rng(7);
-  const out = [];
-  for (let i = 0; i < 30; i++) {
-    const p = parts[Math.floor(r() * parts.length)];
-    const day = 24 - Math.floor(i / 10) * 2;
-    out.push({
-      id: i + 1, client_ref: `seed-${i + 1}`, status: "new",
-      operation: ops[Math.floor(r() * ops.length)], pivot: p.pivot, part: p.part,
-      contractor: contractors[Math.floor(r() * contractors.length)], operator: "operator.demo",
-      work_date: `2026-11-${day}`, recorded_at: `2026-11-${day}T12:00:00Z`,
-      rate_per_fed: null, bill: null, reason: null,
-    });
-  }
-  return out;
-}
-
-function buildDb() {
-  const farms = [buildRealFarm("demo", "Demo Farm", 11), buildFarm("demo2", "Demo Farm 2", "D2", 23)];
-  const demo = farms[0];
-  return {
-    farms,
-    submissions: buildSubmissions(demo.parts),
-    nextId: 31,
-    fleet: [
-      { code: "T-01", name: "Tractor 01", lat: 22.5105, lon: 31.0262, lastFixDays: 8, online: false },
-      { code: "T-02", name: "Tractor 02", lat: 22.5248, lon: 31.0404, lastFixDays: 28, online: false },
-      { code: "T-03", name: "Tractor 03", lat: 22.5440, lon: 31.0580, lastFixDays: 21, online: false },
-    ],
-    scenes: [
-      { date: "2026-11-23", sat: "Sentinel-2C", note: "cloudy", cloud: 0 },
-      { date: "2026-11-18", sat: "Sentinel-2B", note: "clear", cloud: 0 },
-      { date: "2026-11-13", sat: "Sentinel-2C", note: "clear", cloud: 0 },
-      { date: "2026-11-08", sat: "Sentinel-2B", note: "clear", cloud: 0 },
-    ],
-  };
-}
-
-module.exports = { buildDb, ops, contractors };
+};
+defs["geometry"]=function(module,exports,require){
+// Pivot positions for the demo farm. Codes are anonymised (D1-001 ...); each row is
+// code,part,crop,areaFed,lat,lon,radiusM   (crop: a = alfalfa, w = wheat, - = not recorded)
+// Positions/radii are circles fitted to the farm's pivot outlines (max fit error 2 m).
+module.exports = [
+  "002,E,a,55,22.49784,30.98785,380;003,W,a,40.5,22.49682,30.99693,325;005,W,a,40.5,22.49589,31.00996,324;006,W,a,40.5,22.49557,31.01643,322;007,E,a,46.5,22.49064,30.97526,350;008,E,a,62.5,22.49063,30.98393,407;009,W,a,62.5,22.48992,30.99348,405;010,F,a,44,22.49103,31.00018,240;011,F,a,67,22.48997,31.0086,297;013,W,a,60,22.48197,30.99229,398;014,E,a,62.5,22.48001,31.01721,405;015,W,a,62.5,22.47281,31.00874,406;016,F,a,44,22.47398,31.01512,244;017,F,a,62.5,22.46537,30.99326,404;034,E,a,62.5,22.55621,31.0506,413;038,E,a,62.5,22.55406,31.08323,410;044,E,w,40.5,22.54707,31.08181,332;045,F,a,56,22.54081,31.02637,246;037,E,a,62.5,22.55459,31.07517,410;043,E,a,62.5,22.54684,31.07459,410;046,E,a,62.5,22.54163,31.03333,412;047,E,a,62.5,22.5411,31.04137,413;048,W,a,62.5,22.54058,31.04947,412;049,E,a,62.5,22.53388,31.03274,413;050,W,a,62.5,22.53336,31.04084,412",
+  "051,E,a,62.5,22.526,31.03214,412;052,E,a,62.5,22.52547,31.04019,413;053,W,a,62.5,22.52495,31.04829,412;054,E,a,62.5,22.52441,31.05666,412;055,W,a,62.5,22.52334,31.0728,413;057,E,a,46.5,22.51865,31.02121,358;058,E,a,62.5,22.51825,31.03156,413;059,W,a,62.5,22.51773,31.03965,412;060,W,a,62.5,22.5172,31.0477,413;062,W,a,62.5,22.51506,31.08026,413;001,F,a,44,22.50234,30.99831,244;004,F,a,67,22.49633,31.00339,297;012,E,a,62.5,22.48232,30.98324,405;033,E,w,62.5,22.55673,31.04255,413;056,W,w,62.5,22.52281,31.08085,412;061,W,a,62.5,22.5156,31.07221,413;002,W,w,55,22.49784,30.98788,381;003,E,w,40.5,22.49682,30.99691,326;007,W,w,46.5,22.49064,30.97528,352;008,W,w,62.5,22.49063,30.98396,409;009,E,w,62.5,22.48992,30.99345,407;032,F,w,125,22.55725,31.03452,411;034,W,w,62.5,22.55621,31.05065,412;037,W,w,62.5,22.55459,31.07521,412;038,W,w,62.5,22.55406,31.08326,412",
+  "043,W,w,62.5,22.54684,31.07461,412;035,W,w,62.5,22.55565,31.05911,412;036,E,w,62.5,22.55512,31.0671,413;039,W,w,62.5,22.54898,31.04202,412;040,W,w,62.5,22.54846,31.05007,412;041,W,w,62.5,22.54791,31.05851,412;042,W,w,62.5,22.54738,31.06656,412;044,W,w,40.5,22.54707,31.08185,332;018,F,-,36,22.6023,31.04162,221;019,F,-,120,22.5988,31.11943,402;020,F,-,44,22.5933,31.18322,246;021,F,-,27,22.59462,31.03305,193;022,F,-,94,22.59647,31.03806,356;023,F,-,125,22.59587,31.04552,412;024,W,-,60,22.59534,31.05361,404;025,W,-,62.5,22.59266,31.09428,413;026,F,-,125,22.59215,31.10232,412;027,F,-,125,22.58946,31.14299,411;028,F,-,120,22.58893,31.15104,402;029,F,-,125,22.58837,31.15955,411;030,F,-,125,22.58784,31.1676,411;031,F,-,125,22.58731,31.17565,411;033,W,-,62.5,22.55673,31.0426,412;036,W,-,62.5,22.55512,31.06715,412",
+].join(";");
 
 };
 defs["pages"]=function(module,exports,require){
@@ -353,135 +375,124 @@ module.exports = {
 };
 
 };
-defs["app"]=function(module,exports,require){
-const { buildDb, ops } = require("./seed");
-const { pageFor, farmTotals, SLUGS } = require("./pages");
+defs["seed"]=function(module,exports,require){
+// Demo data. Pivot codes are anonymised (D1-001 ...); all other values (status, hay, contractors, submissions) are synthetic.
+// Farm 1 uses real pivot positions (lib/geometry.js); farm 2 is a synthetic layout.
+// Convention copied from the real portal: a value nobody supplied is null (shown as "Not supplied"), never 0.
 
-const PAGE_SIZE = 25;
+function rng(seed) { let s = seed; return () => (s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296; }
 
-function centerOf(farm) {
-  const n = farm.parts.length;
-  return { lat: farm.parts.reduce((t, p) => t + p.lat, 0) / n, lon: farm.parts.reduce((t, p) => t + p.lon, 0) / n };
+const GEO = require("./geometry");
+const M = 111320;
+
+// Farm 1: pivot circles at their real positions, anonymised codes.
+function buildRealFarm(key, name, seed) {
+  const r = rng(seed);
+  const rows = GEO.split(";").map(x => x.split(","));
+  const parts = rows.map(([c, part, crop, area, lat, lon, rad]) => {
+    const n = Number(c);
+    return {
+      pivot: `D1-${c}`, part, id: `D1-${c}-${part}`,
+      crop: crop === "a" ? "alfalfa" : crop === "w" ? "wheat" : null,
+      road: n >= 46 && n <= 55 ? "C03" : null,
+      areaFed: Number(area), lat: Number(lat), lon: Number(lon), radiusM: Number(rad),
+      ndvi: r() < 0.37 ? Math.round((0.35 + r() * 0.5) * 100) / 100 : null, // 27 of 74 parts have values in the real portal
+      leased: null, stage: null,
+    };
+  });
+  const minLon = Math.min(...parts.map(p => p.lon)), maxLat = Math.max(...parts.map(p => p.lat));
+  parts.forEach(p => { p.x = 60 + (p.lon - minLon) * M * 0.92 / 8; p.y = 60 + (maxLat - p.lat) * M / 8; p.rPx = p.radiusM / 8; });
+  return { key, name, parts };
 }
 
-function createApp() {
-  const db = buildDb();
-  const farmOf = key => db.farms.find(f => f.key === key) || db.farms[0];
-  const json = (status, body) => ({ status, type: "application/json; charset=utf-8", body: JSON.stringify(body) });
-  const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s));
-  const findPart = (farm, pivot, part) => farm.parts.find(p => p.pivot === pivot && (!part || p.part === part));
+// synthetic location for farm 2 (open desert with imagery coverage)
+const BASE = { lat: 22.9, lon: 29.4 };
+function geoOf(east, north) {
+  const lat = BASE.lat + north / M;
+  return { lat: Math.round(lat * 1e6) / 1e6, lon: Math.round((BASE.lon + east / (M * Math.cos(lat * Math.PI / 180))) * 1e6) / 1e6 };
+}
 
-  function validateSubmission(b, farm) {
-    const errors = [];
-    if (typeof b.client_ref !== "string" || !b.client_ref.trim() || b.client_ref.length > 64) errors.push("client_ref required (max 64 chars)");
-    if (!ops.includes(b.operation)) errors.push("operation must be one of: " + ops.join(", "));
-    if (!findPart(farm, b.pivot, b.part)) errors.push("unknown pivot/part");
-    if (typeof b.contractor !== "string" || !b.contractor.trim()) errors.push("contractor required");
-    if (typeof b.work_date !== "string" || !isDate(b.work_date)) errors.push("work_date must be YYYY-MM-DD");
-    return errors;
-  }
-
-  function handle({ method, path, query = {}, headers = {}, body }) {
-    const role = String(headers["x-role"] || "viewer").toLowerCase();
-    const farm = farmOf(query.farm);
-
-    if (method === "GET" && path === "/api/health") return json(200, { status: "ok" });
-    if (method === "GET" && path === "/api/farms") return json(200, db.farms.map(f => ({ key: f.key, name: f.name, ...farmTotals(f) })));
-
-    if (method === "GET" && path === "/api/map") {
-      return json(200, {
-        farm: farm.key, pivots: farmTotals(farm).pivots, partCount: farmTotals(farm).parts, fed: farmTotals(farm).fed, mapStatusKnown: 0,
-        center: centerOf(farm), radiusM: 290, roads: [...new Set(farm.parts.map(p => p.road).filter(Boolean))],
-        fleet: farm.key === "demo" ? db.fleet.map(m => ({ code: m.code, name: m.name, lat: m.lat, lon: m.lon, lastFixDays: m.lastFixDays, online: m.online })) : [],
-        parts: farm.parts.map(p => ({ id: p.id, pivot: p.pivot, part: p.part, crop: p.crop, areaFed: p.areaFed, x: p.x, y: p.y, r: p.rPx, lat: p.lat, lon: p.lon, radiusM: p.radiusM, ndvi: p.ndvi, road: p.road, status: null })),
-      });
-    }
-
-    if (method === "GET" && path === "/api/pivots") {
-      const q = (query.q || "").toLowerCase();
-      const rows = farm.parts
-        .filter(p => (!query.crop || p.crop === query.crop) && (!query.road || p.road === query.road) && (!q || p.id.toLowerCase().includes(q)))
-        .map(p => ({ id: p.id, pivot: p.pivot, part: p.part, crop: p.crop, road: p.road, areaFed: p.areaFed, stage: null, hay: null, cp: null, ndvi: p.ndvi, leased: null }));
-      return json(200, { total: rows.length, rows });
-    }
-
-    const page = path.match(/^\/api\/pages\/([a-z-]+)$/);
-    if (method === "GET" && page) {
-      if (!SLUGS.includes(page[1])) return json(404, { error: "unknown page" });
-      return json(200, pageFor(page[1], farm, db));
-    }
-
-    if (method === "GET" && path === "/api/mobile/submissions") {
-      const all = db.submissions.filter(s => (!query.status || s.status === query.status) && (!query.pivot || s.pivot === query.pivot));
-      const total = all.length;
-      const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-      const p = Math.min(Math.max(parseInt(query.page || "1", 10) || 1, 1), pages);
-      const rows = all.slice().sort((a, b) => b.recorded_at.localeCompare(a.recorded_at) || b.id - a.id).slice((p - 1) * PAGE_SIZE, p * PAGE_SIZE);
-      return json(200, { total, page: p, pages, rows, canReview: role === "reviewer" });
-    }
-
-    if (method === "POST" && path === "/api/mobile/submissions") {
-      const b = body || {};
-      const existing = db.submissions.find(s => s.client_ref === b.client_ref);
-      if (existing) return json(200, { duplicate: true, submission: existing }); // idempotent: same client_ref never creates a 2nd record
-      const errors = validateSubmission(b, farm);
-      if (errors.length) return json(400, { errors });
-      const rec = {
-        id: db.nextId++, client_ref: b.client_ref, status: "new", operation: b.operation, pivot: b.pivot, part: b.part || null,
-        contractor: b.contractor, operator: b.operator || "operator.demo", work_date: b.work_date,
-        recorded_at: new Date().toISOString(), rate_per_fed: null, bill: null, reason: null,
-      };
-      db.submissions.push(rec);
-      return json(201, { duplicate: false, submission: rec });
-    }
-
-    const act = path.match(/^\/api\/mobile\/submissions\/(\d+)\/(approve|reject)$/);
-    if (method === "POST" && act) {
-      if (role !== "reviewer") return json(403, { error: "Review actions are unavailable for your current role." });
-      const s = db.submissions.find(x => x.id === Number(act[1]));
-      if (!s) return json(404, { error: "not found" });
-      if (s.status !== "new") return json(409, { error: `already ${s.status}` });
-      const b = body || {};
-      if (act[2] === "reject") {
-        if (typeof b.reason !== "string" || !b.reason.trim()) return json(400, { errors: ["reason required"] });
-        s.status = "rejected"; s.reason = b.reason.trim();
-        return json(200, { submission: s });
+function buildFarm(key, name, prefix, seed) {
+  const r = rng(seed);
+  const parts = [];
+  let n = 0;
+  // Three irregular blocks of staggered (hex-like) rows with small jitter, so the map does not look like a grid.
+  // east/north are metres from the farm origin; x/y are only used by the plain SVG fallback.
+  const blocks = [{ ox: 0, oy: 0 }, { ox: 5200, oy: 900 }, { ox: 1800, oy: -2300 }];
+  const SPX = 680, SPY = 600, ROWS = 3, COLS = 7;
+  for (const b of blocks) {
+    for (let row = 0; row < ROWS && n < 62; row++) {
+      for (let col = 0; col < COLS && n < 62; col++) {
+        n++;
+        const east = b.ox + col * SPX + (row % 2) * (SPX / 2) + (r() - 0.5) * 60;
+        const north = b.oy - row * SPY + (r() - 0.5) * 60;
+        const code = `${prefix}-${String(n).padStart(3, "0")}`;
+        const kinds = n % 5 === 0 ? ["E", "W"] : ["F"]; // 62 pivots, 12 split in two = 74 parts (same counts as the real farm)
+        for (const part of kinds) {
+          parts.push({
+            pivot: code, part, id: `${code}-${part}`,
+            crop: r() < 0.7 ? "alfalfa" : "wheat",
+            road: r() < 0.4 ? "C03" : null,
+            areaFed: Math.round((part === "F" ? 66 : 33) * (0.9 + r() * 0.2) * 10) / 10,
+            east, north, x: 80 + east / 6, y: 300 - north / 6, rPx: 48,
+            ...geoOf(east, north), radiusM: 290,
+            ndvi: r() < 0.37 ? Math.round((0.35 + r() * 0.5) * 100) / 100 : null, // 27 of 74 parts have values in the real portal
+            leased: null, stage: null,
+          });
+        }
       }
-      const rate = Number(b.rate_per_fed);
-      if (!Number.isFinite(rate) || rate <= 0) return json(400, { errors: ["rate_per_fed must be a positive number"] });
-      const part = findPart(farm, s.pivot, s.part) || { areaFed: 0 };
-      s.status = "approved"; s.rate_per_fed = rate;
-      s.bill = { id: "BILL-" + String(s.id).padStart(4, "0"), state: "draft", amount: Math.round(rate * part.areaFed * 100) / 100 };
-      return json(200, { submission: s, note: "Draft vendor bill only. Not posted; no inventory moved." });
     }
-
-    if (method === "GET" && path === "/api/reports/preview") {
-      const { dataset, from, to } = query;
-      if (!isDate(from || "") || !isDate(to || "")) return json(400, { errors: ["from and to must be YYYY-MM-DD"] });
-      if (Date.parse(to) <= Date.parse(from)) return json(400, { errors: ["to must be after from (end exclusive)"] });
-      const columns = ["ID", "Operation", "Pivot", "Part", "Season", "Work type", "Status", "Actual start UTC", "Recorded completed fed", "Source"];
-      const rows = dataset && dataset !== "Recorded field operations" ? [] : db.submissions.filter(s => s.work_date >= from && s.work_date < to)
-        .map(s => [s.id, s.operation, s.pivot, s.part, null, null, s.status, s.recorded_at, null, "mobile app"]);
-      return json(200, { dataset: dataset || "Recorded field operations", columns, rows, total: rows.length, generated: new Date().toISOString() });
-    }
-
-    if (method === "GET" && path === "/api/reports/export") {
-      const { from, to } = query;
-      if (!isDate(from || "") || !isDate(to || "")) return json(400, { errors: ["from and to must be YYYY-MM-DD"] });
-      if (Date.parse(to) <= Date.parse(from)) return json(400, { errors: ["to must be after from (end exclusive)"] });
-      const head = ["id", "operation", "pivot", "part", "contractor", "work_date", "status"];
-      const rows = db.submissions.filter(s => s.work_date >= from && s.work_date < to)
-        .map(s => head.map(h => `"${String(s[h] ?? "").replace(/"/g, '""')}"`).join(","));
-      return { status: 200, type: "text/csv; charset=utf-8", body: [head.join(","), ...rows].join("\n") };
-    }
-
-    return json(404, { error: "not found" });
   }
-
-  return { handle, db };
+  // Normalise so the farm total equals the real farm's 4,875.5 fed.
+  const total = parts.reduce((t, p) => t + p.areaFed, 0), k = 4875.5 / total;
+  parts.forEach(p => { p.areaFed = Math.round(p.areaFed * k * 10) / 10; });
+  const diff = Math.round((4875.5 - parts.reduce((t, p) => t + p.areaFed, 0)) * 10) / 10;
+  parts[parts.length - 1].areaFed = Math.round((parts[parts.length - 1].areaFed + diff) * 10) / 10;
+  return { key, name, parts };
 }
 
-module.exports = { createApp };
+const ops = ["سطارة", "بدارة", "ديسك مع زحافة", "تسوية زحافة"];
+const contractors = ["مقاول تجريبي 1", "مقاول تجريبي 2", "مقاول تجريبي 3"];
+
+function buildSubmissions(parts) {
+  const r = rng(7);
+  const out = [];
+  for (let i = 0; i < 30; i++) {
+    const p = parts[Math.floor(r() * parts.length)];
+    const day = 24 - Math.floor(i / 10) * 2;
+    out.push({
+      id: i + 1, client_ref: `seed-${i + 1}`, status: "new",
+      operation: ops[Math.floor(r() * ops.length)], pivot: p.pivot, part: p.part,
+      contractor: contractors[Math.floor(r() * contractors.length)], operator: "operator.demo",
+      work_date: `2026-11-${day}`, recorded_at: `2026-11-${day}T12:00:00Z`,
+      rate_per_fed: null, bill: null, reason: null,
+    });
+  }
+  return out;
+}
+
+function buildDb() {
+  const farms = [buildRealFarm("demo", "Demo Farm", 11), buildFarm("demo2", "Demo Farm 2", "D2", 23)];
+  const demo = farms[0];
+  return {
+    farms,
+    submissions: buildSubmissions(demo.parts),
+    nextId: 31,
+    fleet: [
+      { code: "T-01", name: "Tractor 01", lat: 22.5105, lon: 31.0262, lastFixDays: 8, online: false },
+      { code: "T-02", name: "Tractor 02", lat: 22.5248, lon: 31.0404, lastFixDays: 28, online: false },
+      { code: "T-03", name: "Tractor 03", lat: 22.5440, lon: 31.0580, lastFixDays: 21, online: false },
+    ],
+    scenes: [
+      { date: "2026-11-23", sat: "Sentinel-2C", note: "cloudy", cloud: 0 },
+      { date: "2026-11-18", sat: "Sentinel-2B", note: "clear", cloud: 0 },
+      { date: "2026-11-13", sat: "Sentinel-2C", note: "clear", cloud: 0 },
+      { date: "2026-11-08", sat: "Sentinel-2B", note: "clear", cloud: 0 },
+    ],
+  };
+}
+
+module.exports = { buildDb, ops, contractors };
 
 };
 const api=req('app').createApp();
